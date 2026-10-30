@@ -3533,7 +3533,7 @@ void configureProvisioningRoutes() {
         WebResponseScope responseScope;
         if (!requireApWebPin()) return;
         server.sendHeader("Location", PLATFORM_SETUP_BASE_URL "setup", true);
-        safeFlashResponse(302, "text/plain", PSTR(""));
+        server.send(302, "text/plain", "");
     });
 }
 
@@ -3610,7 +3610,7 @@ void configureWebRoutes() {
         if (!requireApWebPin()) return;
         if (credentialPortalOnly) {
             server.sendHeader("Location", PLATFORM_SETUP_BASE_URL "setup", true);
-            safeFlashResponse(302, "text/plain", PSTR(""));
+            server.send(302, "text/plain", "");
             return;
         }
         safeFlashResponse(404, "text/plain; charset=utf-8", PSTR("Not found"));
