@@ -969,7 +969,12 @@ enum MqttAdminCommand : uint8_t {
     MQTT_ADMIN_REMOTE_OTA,
     MQTT_ADMIN_OTA_REJECTED,
     MQTT_ADMIN_RESTART,
-    // APPLICATION COMMAND ENUM
+    MQTT_ADMIN_UTILITY_ADD,
+    MQTT_ADMIN_UTILITY_UPDATE,
+    MQTT_ADMIN_UTILITY_DELETE,
+    MQTT_ADMIN_UTILITY_LIST,
+    MQTT_ADMIN_TARIFF_MODE_SET,
+    MQTT_ADMIN_HISTORY,
     MQTT_ADMIN_INVALID
 };
 
@@ -6065,176 +6070,8 @@ bool publishMqttSample() {
     return mqttClient.publish(MQTT_STATE_TOPIC, payload, false);
 }
 
-void handleRoot() {
-    WebResponseScope responseScope;
-    if (!requireApWebPin()) return;
+// v7.0: root handler is owned by CommonPlatform 1.05; obsolete duplicate removed.
 
-    const bool liveRequest = server.uri() == "/live";
-    WiFiClient client = server.client();
-    client.setTimeout(700);
-    client.setNoDelay(true);
-    webRootRequestCount++;
-
-    const unsigned long rootNow = millis();
-    if (webRootRequestCount > 1 &&
-        rootNow - webRootLastRequestMs < WEB_ROOT_MIN_REQUEST_GAP_MS) {
-        webRootRateLimitedCount++;
-        sendRootBusyAndClose(client,429,ESP.getFreeHeap(),ESP.getMaxFreeBlockSize());
-        return;
-    }
-    webRootLastRequestMs = rootNow;
-
-    uint32_t rootFreeHeap = 0;
-    uint16_t rootMaxBlock = 0;
-    uint8_t rootFragmentation = 0;
-    if (!webRootHeapHealthy(&rootFreeHeap, &rootMaxBlock, &rootFragmentation)) {
-        markCrashStage(CRASH_STAGE_WEB_ROOT, rootFreeHeap);
-        ++webRootBusyCount;
-        sendRootBusyAndClose(client,503,rootFreeHeap,rootMaxBlock);
-        return;
-    }
-
-    markCrashStage(CRASH_STAGE_WEB_ROOT, rootFreeHeap);
-    refreshV3EstimateView();
-    static const char header[] =
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
-        "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
-    if (!writeRootBytes(client, reinterpret_cast<const uint8_t*>(header), sizeof(header)-1)) return;
-    PGM_P head = PSTR(
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>EnergyMeter</title><style>"
-        "body{font:22px/1.35 Arial,sans-serif;max-width:760px;margin:auto;padding:4px;color:#142431}"
-        "h2{font-size:34px;margin:0 0 6px}h3{font-size:inherit;margin:16px 0 6px}"
-        ".dim{color:#64727c}pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0}"
-        ".utility-title{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px;margin-top:10px}"
-        ".utility-title h3{margin:0}.utility-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:0}"
-        ".utility-grid div{overflow-wrap:anywhere}.table-wrap{overflow-x:auto}"
-        "table{border-collapse:collapse;width:100%;max-width:400px;font:inherit}"
-        "th,td{padding:5px 7px;border-bottom:1px solid #e5eaed;text-align:right;white-space:nowrap}"
-        "th:first-child,td:first-child{text-align:left}a{margin-right:10px}p{margin:10px 0}"
-        "@media(max-width:480px){.utility-grid{grid-template-columns:1fr}}"
-        "</style></head><body><h2>EnergyMeter v" VERSION "</h2>"
-        "<div id='live-readings'>");
-    if (!liveRequest && !writeRootProgmemViaRam(client,head,strlen_P(head))) return;
-    PGM_P readingsHead=PSTR("<section><div class='utility-grid'>");
-    if (!writeRootProgmemViaRam(client,readingsHead,strlen_P(readingsHead))) return;
-    char line[384];
-#if METER_TYPE == METER_DDS238
-    const float signedTotalPower = power;
-#else
-    const float signedTotalPower = jsyReverseTotal ? -fabs(totalPowerJSY) : fabs(totalPowerJSY);
-#endif
-    int n=0;
-    const uint8_t rootMode = dualZoneEnabled ? V3_MODE_DUAL : V3_MODE_MONO;
-    const bool rootEstimateValid =
-        v3EstimateUtilityValid && v3EstimatePointValid &&
-        v3EstimateUtility.mode == rootMode &&
-        v3EstimatePoint.continuityGeneration == v3State.continuityGeneration;
-    const bool rootReferenceValid =
-        v3LatestUtilityValid && v3LatestUtility.mode == rootMode;
-    if (rootEstimateValid || rootReferenceValid) {
-        const bool dual = dualZoneEnabled;
-        for (uint8_t zone=0; zone<(dual ? 2 : 1); ++zone) {
-            const char* label = dual ? (zone==0 ? "Z1" : "Z2") : "Z";
-            const double latest = dual
-                ? (zone==0 ? tariffZ1Reference : tariffZ2Reference) : tariffZReference;
-            const double now = dual
-                ? (zone==0 ? tariffZ1Now : tariffZ2Now) : tariffZNow;
-            char diffText[24] = "--";
-            char nowText[24] = "--";
-            char latestText[24] = "--";
-            if (rootEstimateValid) snprintf(nowText, sizeof(nowText), "%.2f", now);
-            if (rootReferenceValid) snprintf(latestText, sizeof(latestText), "%.0f", latest);
-            if (rootEstimateValid && rootReferenceValid)
-                snprintf(diffText, sizeof(diffText), "%+.2f", now-latest);
-            n=snprintf(line,sizeof(line),
-                "<div>%s diff: %s kWh<br>%s now: %s kWh<br>%s latest: %s kWh</div>",
-                label,diffText,label,nowText,label,latestText);
-            if (n<=0 || n>=(int)sizeof(line)) {closeRootClient(client,false);return;}
-            if (!writeRootBytes(client, reinterpret_cast<const uint8_t*>(line), (size_t)n)) return;
-        }
-    } else if (!writeRootProgmemViaRam(client,
-        PSTR("<div>No DEH indication or measurement recorded.</div>"),
-        strlen_P(PSTR("<div>No DEH indication or measurement recorded.</div>")))) return;
-    n=snprintf(line,sizeof(line),"</div></section><section><div class='utility-title'><h3>Measurements</h3><span>Total power: %.0f W</span></div><div class='table-wrap'><table>",signedTotalPower);
-    if (n<=0 || n>=(int)sizeof(line)) {closeRootClient(client,false);return;}
-    if (!writeRootBytes(client, reinterpret_cast<const uint8_t*>(line), (size_t)n)) return;
-#if METER_TYPE == METER_DDS238
-    n=snprintf(line,sizeof(line),
-        "<tr><td>Voltage</td><td>%.1f V</td></tr><tr><td>Current</td><td>%.2f A</td></tr>"
-        "<tr><td>Power</td><td>%.0f W</td></tr><tr><td>PF</td><td>%.3f</td></tr>",
-        voltage,fabs(current),power,pf);
-    if (n<=0 || n>=(int)sizeof(line)) {closeRootClient(client,false);return;}
-    if (!writeRootBytes(client, reinterpret_cast<const uint8_t*>(line), (size_t)n)) return;
-#else
-    PGM_P tableHead=PSTR("<tr><th>Phase</th><th>W</th><th>V</th><th>A</th><th>PF</th></tr>");
-    if (!writeRootProgmemViaRam(client,tableHead,strlen_P(tableHead))) return;
-    const float signedP1=jsyReverse1 ? -fabs(power1) : fabs(power1);
-    const float signedP2=jsyReverse2 ? -fabs(power2) : fabs(power2);
-    const float signedP3=jsyReverse3 ? -fabs(power3) : fabs(power3);
-    n=snprintf(line,sizeof(line),
-        "<tr><td>R</td><td>%.0f</td><td>%.1f</td><td>%.2f</td><td>%.3f</td></tr>"
-        "<tr><td>S</td><td>%.0f</td><td>%.1f</td><td>%.2f</td><td>%.3f</td></tr>"
-        "<tr><td>T</td><td>%.0f</td><td>%.1f</td><td>%.2f</td><td>%.3f</td></tr>",
-        signedP1,voltage1,fabs(current1),pf1,
-        signedP2,voltage2,fabs(current2),pf2,
-        signedP3,voltage3,fabs(current3),pf3);
-    if (n<=0 || n>=(int)sizeof(line)) {closeRootClient(client,false);return;}
-    if (!writeRootBytes(client, reinterpret_cast<const uint8_t*>(line), (size_t)n)) return;
-#endif
-    n=snprintf(line,sizeof(line),
-        "</table></div><div class='utility-grid'><div>Frequency: %.2f Hz"
-        "<p><a href='/network-debug'>Network Debug</a><a href='/setup'>Netword Setup</a></p></div>"
-        "<div>Import: %.2f kWh<br>Export: %.2f kWh</div></div></section>",
-        freq,(double)v3RawImportWh/1000.0,(double)v3RawExportWh/1000.0);
-    if (n<=0 || n>=(int)sizeof(line)) {closeRootClient(client,false);return;}
-    if (!writeRootBytes(client, reinterpret_cast<const uint8_t*>(line), (size_t)n)) return;
-    n=snprintf(line,sizeof(line),
-        "<section><pre>Wi-Fi: %s\nMQTT: %s\nRSSI: %d dBm\nFree heap: %lu bytes</pre></section>",
-        WiFi.status()==WL_CONNECTED ? "CONNECTED" : "OFFLINE",
-        mqttClient.connected() ? "CONNECTED" : "DISCONNECTED",WiFi.RSSI(),(unsigned long)ESP.getFreeHeap());
-    if (n<=0 || n>=(int)sizeof(line)) {closeRootClient(client,false);return;}
-    if (!writeRootBytes(client, reinterpret_cast<const uint8_t*>(line), (size_t)n)) return;
-    char deviceDateTime[32];
-    formatCurrentDateTime(deviceDateTime,sizeof(deviceDateTime));
-    if (liveRequest) {
-        n=snprintf_P(line,sizeof(line),PSTR("<!--device-time:%s-->"),deviceDateTime);
-        if (n<=0 || n>=(int)sizeof(line)) {closeRootClient(client,false);return;}
-        if (!writeRootBytes(client,reinterpret_cast<const uint8_t*>(line),(size_t)n)) return;
-        PGM_P end=PSTR("<!--live-end-->");
-        if (!writeRootProgmemViaRam(client,end,strlen_P(end))) return;
-        closeRootClient(client,true);
-        return;
-    }
-    PGM_P footer=PSTR(
-        "</div><div id='live-state' class='dim' aria-live='polite'></div>"
-        "<p><a href='/force-ota-recovery-confirm'>Force OTA-ONLY Recovery...</a></p>"
-        "<div class='dim'>Device: " DEVICE_ID " · Meter: " METER_NAME "</div>");
-    if (!writeRootProgmemViaRam(client,footer,strlen_P(footer))) return;
-    n=snprintf_P(line,sizeof(line),PSTR("<div class='dim'>MQTT ID: %s</div>"),mqttDeviceId);
-    if (n<=0 || n>=(int)sizeof(line)) {closeRootClient(client,false);return;}
-    if (!writeRootBytes(client,reinterpret_cast<const uint8_t*>(line),(size_t)n)) return;
-    n=snprintf_P(line,sizeof(line),PSTR("<div id='device-time' class='dim'>ESP8266 date/time: %s</div>"),deviceDateTime);
-    if (n<=0 || n>=(int)sizeof(line)) {closeRootClient(client,false);return;}
-    if (!writeRootBytes(client,reinterpret_cast<const uint8_t*>(line),(size_t)n)) return;
-    PGM_P tail=PSTR(
-        "<script>(function(){"
-        "const readings=document.getElementById('live-readings'),state=document.getElementById('live-state'),clock=document.getElementById('device-time');"
-        "async function update(){const started=Date.now();"
-        "if(!document.hidden){const controller=new AbortController();"
-        "const timeout=setTimeout(()=>controller.abort(),4000);"
-        "try{const response=await fetch('/live',{cache:'no-store',signal:controller.signal});"
-        "const text=await response.text();"
-        "if(!response.ok||!text.endsWith('<!--live-end-->'))throw new Error('incomplete');"
-        "const stamp=text.match(/<!--device-time:([^<]*)-->/);if(!stamp)throw new Error('clock');readings.innerHTML=text.slice(0,-15).replace(stamp[0],'');clock.textContent='ESP8266 date/time: '+stamp[1];state.textContent='';"
-        "}catch(error){state.textContent='Waiting for live measurements...';}"
-        "finally{clearTimeout(timeout);}}"
-        "setTimeout(update,Math.max(0,5000-(Date.now()-started)));}"
-        "setTimeout(update,5000);})();</script></body></html>");
-    if (!writeRootProgmemViaRam(client,tail,strlen_P(tail))) return;
-    closeRootClient(client, true);
-}
 
 bool prepareV3UtilityTimestamp(uint8_t kind, bool updateExisting, char* date, size_t dateSize,
                                bool& exact, uint16_t& minute) {
