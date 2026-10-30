@@ -977,7 +977,7 @@ private:
 void handleApWebLogin() {
     WebResponseScope responseScope;
     if (!credentialPortalActive) {
-        server.send(404, "text/plain", "Not found");
+        safeFlashResponse(404, "text/plain", PSTR("Not found"));
         return;
     }
     if (server.arg("pin") != AP_WEB_PIN) {
@@ -996,7 +996,7 @@ void handleApWebLogin() {
     server.sendHeader("Cache-Control", "no-store");
     server.sendHeader("Set-Cookie", cookie);
     server.sendHeader("Location", "/", true);
-    server.send(303, "text/plain", "");
+    safeFlashResponse(303, "text/plain", PSTR(""));
 }
 
 
@@ -2597,8 +2597,6 @@ bool streamReportPart(WiFiClient& client,const String& part,bool escapeHtml){
     return streamReportBytes(client,part.c_str(),part.length(),escapeHtml);
 }
 bool streamRecoveryReport(WiFiClient& client, bool htmlEscape) {
-    String d;
-    d.reserve(1700);
     if (!streamReportPart(client, ("" DEVICE_LABEL " OTA-ONLY RECOVERY / Ver " + String(VERSION) + "\n"), htmlEscape)) return false;
     if (!streamReportPart(client, ("Measurements, MQTT, admin commands and statistics: DISABLED\n"), htmlEscape)) return false;
     if (!streamReportPart(client, ("Firmware=" + String(VERSION) + " build=" + String(BUILD_DATE) + "\n"), htmlEscape)) return false;
@@ -2732,8 +2730,7 @@ void handleRecoveryEspRestart() {
     WebResponseScope responseScope;
     if (!recoveryMode || !requireApWebPin()) return;
     if (recoveryOtaInProgress || recoveryNormalRestartPending) {
-        server.send(409, "text/plain; charset=utf-8",
-                    "Restart refused: OTA or normal restart in progress.");
+        safeFlashResponse(409, "text/plain; charset=utf-8", PSTR("Restart refused: OTA or normal restart in progress."));
         return;
     }
     if (!recoveryEspRestartPending) {
@@ -2741,8 +2738,7 @@ void handleRecoveryEspRestart() {
         recoveryEspRestartRequestedMs = millis();
     }
     server.sendHeader("Cache-Control", "no-store");
-    server.send(200, "text/plain; charset=utf-8",
-                "ESP restarting, OTA-only Recovery incident preserved.");
+    safeFlashResponse(200, "text/plain; charset=utf-8", PSTR("ESP restarting, OTA-only Recovery incident preserved."));
 }
 
 void handleRecoveryRestartNormal() {
@@ -2753,8 +2749,7 @@ void handleRecoveryRestartNormal() {
     if (!littleFsReady) {
         queueOledDiagnostic(OLED_DIAG_RECOVERY_CLEAR, "RECOVERY CLEAR FAILED", "LittleFS unavailable; Recovery remains latched");
         server.sendHeader("Cache-Control", "no-store");
-        server.send(503, "text/plain; charset=utf-8",
-                    "Restart refused: LittleFS unavailable; Recovery remains latched.");
+        safeFlashResponse(503, "text/plain; charset=utf-8", PSTR("Restart refused: LittleFS unavailable; Recovery remains latched."));
         return;
     }
 
@@ -2767,8 +2762,7 @@ void handleRecoveryRestartNormal() {
         recoveryResetClearFailed = true;
         queueOledDiagnostic(OLED_DIAG_RECOVERY_CLEAR, "RECOVERY CLEAR FAILED", "Recovery file removal failed; restart refused");
         server.sendHeader("Cache-Control", "no-store");
-        server.send(500, "text/plain; charset=utf-8",
-                    "Restart refused: recovery incident could not be cleared.");
+        safeFlashResponse(500, "text/plain; charset=utf-8", PSTR("Restart refused: recovery incident could not be cleared."));
         return;
     }
 
@@ -2892,7 +2886,7 @@ void handleCredentialSave() {
     WebResponseScope responseScope;
     if (!requireApWebPin()) return;
     if (!littleFsReady) {
-        server.send(503, "text/plain; charset=utf-8", "LittleFS unavailable");
+        safeFlashResponse(503, "text/plain; charset=utf-8", PSTR("LittleFS unavailable"));
         return;
     }
 
@@ -2916,7 +2910,7 @@ void handleCredentialSave() {
         newUser.length() >= sizeof(oldRec.mqttUser) ||
         newMqttPassword.length() >= sizeof(oldRec.mqttPassword) ||
         portValue < 1 || portValue > 65535) {
-        server.send(400, "text/plain; charset=utf-8", "Invalid credential fields");
+        safeFlashResponse(400, "text/plain; charset=utf-8", PSTR("Invalid credential fields"));
         return;
     }
 
@@ -2929,21 +2923,20 @@ void handleCredentialSave() {
         !copyCredentialField(rec.mqttHost, sizeof(rec.mqttHost), newHost.c_str()) ||
         !copyOptionalCredentialField(rec.mqttUser, sizeof(rec.mqttUser), newUser.c_str()) ||
         !copyOptionalCredentialField(rec.mqttPassword, sizeof(rec.mqttPassword), newMqttPassword.c_str())) {
-        server.send(400, "text/plain; charset=utf-8", "Credential field too long");
+        safeFlashResponse(400, "text/plain; charset=utf-8", PSTR("Credential field too long"));
         return;
     }
     rec.checksum = deviceCredentialChecksum(rec);
 
     if (!writeDeviceCredentialRecord(rec)) {
-        server.send(500, "text/plain; charset=utf-8", "Could not save credentials");
+        safeFlashResponse(500, "text/plain; charset=utf-8", PSTR("Could not save credentials"));
         return;
     }
 
     server.sendHeader("Cache-Control", "no-store");
-    server.send(200, "text/html; charset=utf-8",
-                "<!doctype html><html><body><h2>Saved</h2>"
+    safeFlashResponse(200, "text/html; charset=utf-8", PSTR("<!doctype html><html><body><h2>Saved</h2>"
                 "<p>Saved and read-back verified. Restarting with the stored Wi-Fi settings.</p>"
-                "<p>MQTT rejection will not erase settings or disable router Wi-Fi.</p></body></html>");
+                "<p>MQTT rejection will not erase settings or disable router Wi-Fi.</p></body></html>"));
     credentialRestartPending = true;
     credentialRestartRequestedMs = millis();
 }
@@ -2972,37 +2965,35 @@ void handleForgetCredentials() {
     if (!requireApWebPin()) return;
     if (server.arg("confirm") != "ERASE") {
         server.sendHeader("Cache-Control", "no-store");
-        server.send(400, "text/html; charset=utf-8",
-                    "<!doctype html><html><body><h2>Confirmation required</h2>"
+        safeFlashResponse(400, "text/html; charset=utf-8", PSTR("<!doctype html><html><body><h2>Confirmation required</h2>"
                     "<p>Credentials were NOT erased.</p>"
                     "<p><a href='/forget-credentials-confirm'>Open confirmation page</a></p>"
-                    "</body></html>");
+                    "</body></html>"));
         return;
     }
 
     if (!littleFsReady) {
-        server.send(503, "text/plain; charset=utf-8", "LittleFS unavailable");
+        safeFlashResponse(503, "text/plain; charset=utf-8", PSTR("LittleFS unavailable"));
         return;
     }
     bool ok = true;
 #if PLATFORM_LOCAL_CONTROL_APPLICATION
     if (!applicationClearLegacyCredentials()) {
-        server.send(500, "text/plain; charset=utf-8", "Could not remove legacy credentials");
+        safeFlashResponse(500, "text/plain; charset=utf-8", PSTR("Could not remove legacy credentials"));
         return;
     }
 #endif
     if (LittleFS.exists(DEVICE_CREDENTIAL_FILE)) ok &= LittleFS.remove(DEVICE_CREDENTIAL_FILE);
     if (LittleFS.exists(DEVICE_CREDENTIAL_TEMP_FILE)) ok &= LittleFS.remove(DEVICE_CREDENTIAL_TEMP_FILE);
     if (!ok) {
-        server.send(500, "text/plain; charset=utf-8", "Could not remove credentials");
+        safeFlashResponse(500, "text/plain; charset=utf-8", PSTR("Could not remove credentials"));
         return;
     }
     server.sendHeader("Cache-Control", "no-store");
-    server.send(200, "text/html; charset=utf-8",
-                "<!doctype html><html><body><h2>Credentials cleared</h2>"
+    safeFlashResponse(200, "text/html; charset=utf-8", PSTR("<!doctype html><html><body><h2>Credentials cleared</h2>"
                 "<p>Restarting into dedicated Setup AP mode...</p>"
                 "<p>The OLED will show the open AP name, web PIN and setup address.</p>"
-                "</body></html>");
+                "</body></html>"));
     credentialRestartPending = true;
     credentialRestartRequestedMs = millis();
 }
@@ -3027,18 +3018,18 @@ void handleForceOtaRecovery() {
     WebResponseScope responseScope;
     if (!requireApWebPin()) return;
     if (server.arg("confirm") != "ENTER") {
-        server.send(400, "text/plain; charset=utf-8", "Confirmation required");
+        safeFlashResponse(400, "text/plain; charset=utf-8", PSTR("Confirmation required"));
         return;
     }
     if (!littleFsReady) {
-        server.send(503, "text/plain; charset=utf-8", "LittleFS unavailable");
+        safeFlashResponse(503, "text/plain; charset=utf-8", PSTR("LittleFS unavailable"));
         return;
     }
 
     recoveryIncident = RecoveryRecord();
     recoveryIncident.reason = RECOVERY_REASON_FORCED_OTA;
     if (!saveRecoveryIncident() || !loadRecoveryIncident()) {
-        server.send(500, "text/plain; charset=utf-8", "Could not persist Recovery request");
+        safeFlashResponse(500, "text/plain; charset=utf-8", PSTR("Could not persist Recovery request"));
         return;
     }
 
@@ -3384,7 +3375,7 @@ void handleMqttStatusJson() {
         (unsigned long)mqttConnectPreflightDeferrals, (unsigned)mqttTlsRecvConfiguredBytes);
     server.sendHeader("Cache-Control", "no-store");
     if (n <= 0 || n >= (int)sizeof(body)) {
-        server.send(503, "application/json", "{\"error\":\"diagnostics_overflow\"}");
+        safeFlashResponse(503, "application/json", PSTR("{\"error\":\"diagnostics_overflow\"}"));
         return;
     }
     server.send(200, "application/json; charset=utf-8", body);
@@ -3550,7 +3541,7 @@ void configureProvisioningRoutes() {
         WebResponseScope responseScope;
         if (!requireApWebPin()) return;
         server.sendHeader("Location", PLATFORM_SETUP_BASE_URL "setup", true);
-        server.send(302, "text/plain", "");
+        safeFlashResponse(302, "text/plain", PSTR(""));
     });
 }
 
@@ -3565,8 +3556,7 @@ void configureRecoveryRoutes() {
         WebResponseScope responseScope;
         if (!requireApWebPin()) return;
         server.sendHeader("Cache-Control", "no-store");
-        server.send(503, "text/plain; charset=utf-8",
-                    "OTA-ONLY RECOVERY: open /debug or /restart-normal; POST /esp-restart for safe restart.");
+        safeFlashResponse(503, "text/plain; charset=utf-8", PSTR("OTA-ONLY RECOVERY: open /debug or /restart-normal; POST /esp-restart for safe restart."));
     });
 }
 
@@ -3629,10 +3619,10 @@ void configureWebRoutes() {
         if (!requireApWebPin()) return;
         if (credentialPortalOnly) {
             server.sendHeader("Location", PLATFORM_SETUP_BASE_URL "setup", true);
-            server.send(302, "text/plain", "");
+            safeFlashResponse(302, "text/plain", PSTR(""));
             return;
         }
-        server.send(404, "text/plain; charset=utf-8", "Not found");
+        safeFlashResponse(404, "text/plain; charset=utf-8", PSTR("Not found"));
     });
 #if PLATFORM_LOCAL_CONTROL_APPLICATION
     applicationConfigureWebRoutes();
@@ -4882,7 +4872,7 @@ void routeHistory() {
   if(!heapSuitable(4000UL,1024U)){
     ++webRootBusyCount;
     server.sendHeader("Retry-After","2");
-    server.send(503,"text/plain","Not enough contiguous heap for history; retry later.");
+    safeFlashResponse(503, "text/plain", PSTR("Not enough contiguous heap for history; retry later."));
     return;
   }
   markCrashStage(CRASH_STAGE_WEB_ROOT,ESP.getFreeHeap());
@@ -4906,7 +4896,7 @@ void routeCharts(){
   if(!requireApWebPin())return;
   if(!heapSuitable(2850UL,850U)){
     server.sendHeader("Retry-After","2");
-    server.send(503,"text/plain","Low heap: retry charts later");return;
+    safeFlashResponse(503, "text/plain", PSTR("Low heap: retry charts later"));return;
   }
   String view=server.arg("view");
   if(view!="24"&&view!="48"&&view!="30")view="24";
@@ -5066,7 +5056,7 @@ void applicationConfigureWebRoutes() {
     WebResponseScope responseScope;
     if(!localControlAuthorized())return;
     if(!ventTryRearmSafeMode()){
-      server.send(409,"text/plain","SafeMode remains active: both critical DS18B20 need 3 consecutive valid samples.");
+      safeFlashResponse(409, "text/plain", PSTR("SafeMode remains active: both critical DS18B20 need 3 consecutive valid samples."));
       return;
     }
     applyFanControl();
@@ -5089,7 +5079,7 @@ void applicationConfigureWebRoutes() {
   server.on("/time",HTTP_POST,[](){
     WebResponseScope responseScope;
     if(!localControlAuthorized())return;
-    if(timeSynchronized){server.send(409,"text/plain","NTP already synchronized");return;}
+    if(timeSynchronized){safeFlashResponse(409, "text/plain", PSTR("NTP already synchronized"));return;}
     int seconds;
     if(parseClock(server.arg("clock"),true,seconds))setManualClock(seconds);
     redirectHome();
