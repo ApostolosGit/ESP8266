@@ -996,7 +996,7 @@ void handleApWebLogin() {
     server.sendHeader("Cache-Control", "no-store");
     server.sendHeader("Set-Cookie", cookie);
     server.sendHeader("Location", "/", true);
-    safeFlashResponse(303, "text/plain", PSTR(""));
+    server.send(303, "text/plain", "");
 }
 
 
