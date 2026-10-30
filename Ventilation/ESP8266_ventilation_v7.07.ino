@@ -2737,7 +2737,6 @@ void handleRecoveryEspRestart() {
         recoveryEspRestartPending = true;
         recoveryEspRestartRequestedMs = millis();
     }
-    server.sendHeader("Cache-Control", "no-store");
     safeFlashResponse(200, "text/plain; charset=utf-8", PSTR("ESP restarting, OTA-only Recovery incident preserved."));
 }
 
@@ -2748,7 +2747,6 @@ void handleRecoveryRestartNormal() {
     // latch has definitely been removed from LittleFS.
     if (!littleFsReady) {
         queueOledDiagnostic(OLED_DIAG_RECOVERY_CLEAR, "RECOVERY CLEAR FAILED", "LittleFS unavailable; Recovery remains latched");
-        server.sendHeader("Cache-Control", "no-store");
         safeFlashResponse(503, "text/plain; charset=utf-8", PSTR("Restart refused: LittleFS unavailable; Recovery remains latched."));
         return;
     }
@@ -2761,7 +2759,6 @@ void handleRecoveryRestartNormal() {
     if (!clearSucceeded) {
         recoveryResetClearFailed = true;
         queueOledDiagnostic(OLED_DIAG_RECOVERY_CLEAR, "RECOVERY CLEAR FAILED", "Recovery file removal failed; restart refused");
-        server.sendHeader("Cache-Control", "no-store");
         safeFlashResponse(500, "text/plain; charset=utf-8", PSTR("Restart refused: recovery incident could not be cleared."));
         return;
     }
@@ -2932,8 +2929,6 @@ void handleCredentialSave() {
         safeFlashResponse(500, "text/plain; charset=utf-8", PSTR("Could not save credentials"));
         return;
     }
-
-    server.sendHeader("Cache-Control", "no-store");
     safeFlashResponse(200, "text/html; charset=utf-8", PSTR("<!doctype html><html><body><h2>Saved</h2>"
                 "<p>Saved and read-back verified. Restarting with the stored Wi-Fi settings.</p>"
                 "<p>MQTT rejection will not erase settings or disable router Wi-Fi.</p></body></html>"));
@@ -2964,7 +2959,6 @@ void handleForgetCredentials() {
     WebResponseScope responseScope;
     if (!requireApWebPin()) return;
     if (server.arg("confirm") != "ERASE") {
-        server.sendHeader("Cache-Control", "no-store");
         safeFlashResponse(400, "text/html; charset=utf-8", PSTR("<!doctype html><html><body><h2>Confirmation required</h2>"
                     "<p>Credentials were NOT erased.</p>"
                     "<p><a href='/forget-credentials-confirm'>Open confirmation page</a></p>"
@@ -2989,7 +2983,6 @@ void handleForgetCredentials() {
         safeFlashResponse(500, "text/plain; charset=utf-8", PSTR("Could not remove credentials"));
         return;
     }
-    server.sendHeader("Cache-Control", "no-store");
     safeFlashResponse(200, "text/html; charset=utf-8", PSTR("<!doctype html><html><body><h2>Credentials cleared</h2>"
                 "<p>Restarting into dedicated Setup AP mode...</p>"
                 "<p>The OLED will show the open AP name, web PIN and setup address.</p>"
@@ -3373,12 +3366,11 @@ void handleMqttStatusJson() {
         mqttLastSslErrorCode, (unsigned long)ESP.getFreeHeap(), (unsigned)ESP.getMaxFreeBlockSize(),
         (unsigned long)mqttConnectHeapAtAttempt, (unsigned)mqttConnectBlockAtAttempt,
         (unsigned long)mqttConnectPreflightDeferrals, (unsigned)mqttTlsRecvConfiguredBytes);
-    server.sendHeader("Cache-Control", "no-store");
     if (n <= 0 || n >= (int)sizeof(body)) {
         safeFlashResponse(503, "application/json", PSTR("{\"error\":\"diagnostics_overflow\"}"));
         return;
     }
-    server.send(200, "application/json; charset=utf-8", body);
+    safeRamResponse(200, "application/json; charset=utf-8", body);
 }
 void configureCredentialRoutes() {
     if (credentialRoutesConfigured) return;
@@ -3555,7 +3547,6 @@ void configureRecoveryRoutes() {
     server.onNotFound([]() {
         WebResponseScope responseScope;
         if (!requireApWebPin()) return;
-        server.sendHeader("Cache-Control", "no-store");
         safeFlashResponse(503, "text/plain; charset=utf-8", PSTR("OTA-ONLY RECOVERY: open /debug or /restart-normal; POST /esp-restart for safe restart."));
     });
 }
