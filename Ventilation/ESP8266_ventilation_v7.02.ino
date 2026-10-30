@@ -4736,9 +4736,6 @@ bool ventilationRootWriteLine(WiFiClient& client, const char* data, int n, size_
   return n > 0 && (size_t)n < capacity &&
     writeRootBytes(client, reinterpret_cast<const uint8_t*>(data), (size_t)n);
 }
-// Control forms must keep their in-progress values while the operator edits.
-bool applicationWebLiveUpdates() { return false; }
-
 bool applicationRenderWebContent(WiFiClient& client) {
   char line[320];
   char values[8][24];
