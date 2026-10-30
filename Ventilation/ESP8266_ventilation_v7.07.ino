@@ -2071,8 +2071,8 @@ bool safeHttpHeader(WiFiClient& client,int code,const char* type,size_t len) {
     const int n=snprintf(h,sizeof(h),
         "HTTP/1.1 %d %s\r\nContent-Type: %s\r\n"
         "Content-Length: %lu\r\nCache-Control: no-store\r\n"
-        "Connection: close\r\n\r\n",
-        code,reason,type,(unsigned long)len);
+        "%sConnection: close\r\n\r\n",
+        code,reason,type,(unsigned long)len,code==503?"Retry-After: 2\r\n":"");
     return n>0 && n<(int)sizeof(h) &&
         writeRootBytes(client,reinterpret_cast<const uint8_t*>(h),(size_t)n);
 }
@@ -4862,7 +4862,6 @@ void routeHistory() {
   // exhaust TCP/TLS resources and interfere with active ArduinoOTA.
   if(!heapSuitable(4000UL,1024U)){
     ++webRootBusyCount;
-    server.sendHeader("Retry-After","2");
     safeFlashResponse(503, "text/plain", PSTR("Not enough contiguous heap for history; retry later."));
     return;
   }
@@ -4886,7 +4885,6 @@ void routeCharts(){
   WebResponseScope responseScope;
   if(!requireApWebPin())return;
   if(!heapSuitable(2850UL,850U)){
-    server.sendHeader("Retry-After","2");
     safeFlashResponse(503, "text/plain", PSTR("Low heap: retry charts later"));return;
   }
   String view=server.arg("view");
