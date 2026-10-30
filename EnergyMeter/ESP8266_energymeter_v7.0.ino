@@ -6654,6 +6654,88 @@ void applicationBackground(unsigned long now) { serviceV5History(now); }
 void applicationFormatSummary(char* out, size_t capacity) {
     snprintf(out, capacity, "Meter active P=%.0fW", (double)power);
 }
+
+// EnergyMeter v7.0 application content for CommonPlatform 1.05 web shell.
+bool applicationWebLiveUpdates() { return true; }
+bool applicationRenderWebContent(WiFiClient& client) {
+    refreshV3EstimateView();
+    PGM_P style=PSTR("<style>.utility-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.utility-grid div{overflow-wrap:anywhere}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;max-width:600px}th,td{padding:5px 7px;border-bottom:1px solid #e5eaed;text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}@media(max-width:480px){.utility-grid{grid-template-columns:1fr}}</style>");
+    if (!writeRootProgmemViaRam(client,style,strlen_P(style))) return false;
+    PGM_P readingsHead=PSTR("<section><div class='utility-grid'>");
+    if (!writeRootProgmemViaRam(client,readingsHead,strlen_P(readingsHead))) return false;
+    char line[384];
+#if METER_TYPE == METER_DDS238
+    const float signedTotalPower = power;
+#else
+    const float signedTotalPower = jsyReverseTotal ? -fabs(totalPowerJSY) : fabs(totalPowerJSY);
+#endif
+    int n=0;
+    const uint8_t rootMode = dualZoneEnabled ? V3_MODE_DUAL : V3_MODE_MONO;
+    const bool rootEstimateValid =
+        v3EstimateUtilityValid && v3EstimatePointValid &&
+        v3EstimateUtility.mode == rootMode &&
+        v3EstimatePoint.continuityGeneration == v3State.continuityGeneration;
+    const bool rootReferenceValid =
+        v3LatestUtilityValid && v3LatestUtility.mode == rootMode;
+    if (rootEstimateValid || rootReferenceValid) {
+        const bool dual = dualZoneEnabled;
+        for (uint8_t zone=0; zone<(dual ? 2 : 1); ++zone) {
+            const char* label = dual ? (zone==0 ? "Z1" : "Z2") : "Z";
+            const double latest = dual
+                ? (zone==0 ? tariffZ1Reference : tariffZ2Reference) : tariffZReference;
+            const double now = dual
+                ? (zone==0 ? tariffZ1Now : tariffZ2Now) : tariffZNow;
+            char diffText[24] = "--";
+            char nowText[24] = "--";
+            char latestText[24] = "--";
+            if (rootEstimateValid) snprintf(nowText, sizeof(nowText), "%.2f", now);
+            if (rootReferenceValid) snprintf(latestText, sizeof(latestText), "%.0f", latest);
+            if (rootEstimateValid && rootReferenceValid)
+                snprintf(diffText, sizeof(diffText), "%+.2f", now-latest);
+            n=snprintf(line,sizeof(line),
+                "<div>%s diff: %s kWh<br>%s now: %s kWh<br>%s latest: %s kWh</div>",
+                label,diffText,label,nowText,label,latestText);
+            if (n<=0 || n>=(int)sizeof(line)) {return false;}
+            if (!writeRootBytes(client, reinterpret_cast<const uint8_t*>(line), (size_t)n)) return false;
+        }
+    } else if (!writeRootProgmemViaRam(client,
+        PSTR("<div>No DEH indication or measurement recorded.</div>"),
+        strlen_P(PSTR("<div>No DEH indication or measurement recorded.</div>")))) return false;
+    n=snprintf(line,sizeof(line),"</div></section><section><div class='utility-title'><h3>Measurements</h3><span>Total power: %.0f W</span></div><div class='table-wrap'><table>",signedTotalPower);
+    if (n<=0 || n>=(int)sizeof(line)) {return false;}
+    if (!writeRootBytes(client, reinterpret_cast<const uint8_t*>(line), (size_t)n)) return false;
+#if METER_TYPE == METER_DDS238
+    n=snprintf(line,sizeof(line),
+        "<tr><td>Voltage</td><td>%.1f V</td></tr><tr><td>Current</td><td>%.2f A</td></tr>"
+        "<tr><td>Power</td><td>%.0f W</td></tr><tr><td>PF</td><td>%.3f</td></tr>",
+        voltage,fabs(current),power,pf);
+    if (n<=0 || n>=(int)sizeof(line)) {return false;}
+    if (!writeRootBytes(client, reinterpret_cast<const uint8_t*>(line), (size_t)n)) return false;
+#else
+    PGM_P tableHead=PSTR("<tr><th>Phase</th><th>W</th><th>V</th><th>A</th><th>PF</th></tr>");
+    if (!writeRootProgmemViaRam(client,tableHead,strlen_P(tableHead))) return false;
+    const float signedP1=jsyReverse1 ? -fabs(power1) : fabs(power1);
+    const float signedP2=jsyReverse2 ? -fabs(power2) : fabs(power2);
+    const float signedP3=jsyReverse3 ? -fabs(power3) : fabs(power3);
+    n=snprintf(line,sizeof(line),
+        "<tr><td>R</td><td>%.0f</td><td>%.1f</td><td>%.2f</td><td>%.3f</td></tr>"
+        "<tr><td>S</td><td>%.0f</td><td>%.1f</td><td>%.2f</td><td>%.3f</td></tr>"
+        "<tr><td>T</td><td>%.0f</td><td>%.1f</td><td>%.2f</td><td>%.3f</td></tr>",
+        signedP1,voltage1,fabs(current1),pf1,
+        signedP2,voltage2,fabs(current2),pf2,
+        signedP3,voltage3,fabs(current3),pf3);
+    if (n<=0 || n>=(int)sizeof(line)) {return false;}
+    if (!writeRootBytes(client, reinterpret_cast<const uint8_t*>(line), (size_t)n)) return false;
+#endif
+    n=snprintf(line,sizeof(line),
+        "</table></div><div class='utility-grid'><div>Frequency: %.2f Hz"
+        "<p><a href='/network-debug'>Network Debug</a><a href='/setup'>Netword Setup</a></p></div>"
+        "<div>Import: %.2f kWh<br>Export: %.2f kWh</div></div></section>",
+        freq,(double)v3RawImportWh/1000.0,(double)v3RawExportWh/1000.0);
+    if (n<=0 || n>=(int)sizeof(line)) {return false;}
+    if (!writeRootBytes(client, reinterpret_cast<const uint8_t*>(line), (size_t)n)) return false;
+    return true;
+}
 // END APPLICATION IMPLEMENTATION
 
 #if !PLATFORM_CUSTOM_APPLICATION
