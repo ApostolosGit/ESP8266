@@ -2568,135 +2568,163 @@ void showRecoveryScreen() {
     doublePrintf(420, 4, 1, "RST = NORMAL / OTA");
 }
 
-String buildRecoveryReport() {
+
+/* Stream each diagnostic field separately. Never allocate a second 2-4 KB
+   String to assemble /debug or /debug.txt in OTA-ONLY Recovery. */
+bool streamReportBytes(WiFiClient& client,const char* text,size_t length,bool escapeHtml){
+    if(!text||!length)return true;
+    if(!escapeHtml)
+        return writeRootBytes(client,reinterpret_cast<const uint8_t*>(text),length);
+    char chunk[128];
+    size_t used=0;
+    for(size_t i=0;i<length;++i){
+        const char c=text[i];
+        const char* entity=c=='&'?"&amp;":c=='<'?"&lt;":c=='>'?"&gt;":nullptr;
+        const size_t n=entity?strlen(entity):1;
+        if(used+n>sizeof(chunk)){
+            if(!writeRootBytes(client,reinterpret_cast<const uint8_t*>(chunk),used))return false;
+            used=0;
+        }
+        if(entity){memcpy(chunk+used,entity,n);used+=n;}
+        else chunk[used++]=c;
+    }
+    return !used||writeRootBytes(client,reinterpret_cast<const uint8_t*>(chunk),used);
+}
+bool streamReportPart(WiFiClient& client,const char* part,bool escapeHtml){
+    return part&&streamReportBytes(client,part,strlen(part),escapeHtml);
+}
+bool streamReportPart(WiFiClient& client,const String& part,bool escapeHtml){
+    return streamReportBytes(client,part.c_str(),part.length(),escapeHtml);
+}
+bool streamRecoveryReport(WiFiClient& client, bool htmlEscape) {
     String d;
     d.reserve(1700);
-    d += "" DEVICE_LABEL " OTA-ONLY RECOVERY / Ver " + String(VERSION) + "\n";
-    d += "Measurements, MQTT, admin commands and statistics: DISABLED\n";
-    d += "Firmware=" + String(VERSION) + " build=" + String(BUILD_DATE) + "\n";
-    d += "Meter=" + String(DEVICE_KIND) + " OLED=" + String(OLED_TYPE) + "\n";
-    d += "Incident reason=" + String(resetReasonLabel(recoveryIncident.reason)) +
-         " (" + String(recoveryIncident.reason) + ")\n";
-    d += "Incident stored in LittleFS=" +
-         String(recoveryIncidentPersistent ? "YES" : "NO (current boot only)") + "\n";
-    d += "RTC crash breadcrumb=";
+    if (!streamReportPart(client, ("" DEVICE_LABEL " OTA-ONLY RECOVERY / Ver " + String(VERSION) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Measurements, MQTT, admin commands and statistics: DISABLED\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Firmware=" + String(VERSION) + " build=" + String(BUILD_DATE) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Meter=" + String(DEVICE_KIND) + " OLED=" + String(OLED_TYPE) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Incident reason=" + String(resetReasonLabel(recoveryIncident.reason)) +
+         " (" + String(recoveryIncident.reason) + ")\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Incident stored in LittleFS=" +
+         String(recoveryIncidentPersistent ? "YES" : "NO (current boot only)") + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("RTC crash breadcrumb="), htmlEscape)) return false;
     if (rtcTraceBeforeResetValid) {
-        d += String(crashStageLabel(rtcTraceBeforeReset.stage)) +
+        if (!streamReportPart(client, (String(crashStageLabel(rtcTraceBeforeReset.stage)) +
              " (" + String(rtcTraceBeforeReset.stage) + ")" +
-             " detail=" + String(rtcTraceBeforeReset.detail) + "\n";
-        d += "RTC trace heap free bytes=" + String(rtcTraceBeforeReset.heapFree) + "\n";
-        d += "RTC trace max free block bytes=" + String(rtcTraceBeforeReset.maxFreeBlock) + "\n";
-        d += "RTC trace heap fragmentation percent=" +
-             String(rtcTraceBeforeReset.heapFragmentation) + "\n";
+             " detail=" + String(rtcTraceBeforeReset.detail) + "\n"), htmlEscape)) return false;
+        if (!streamReportPart(client, ("RTC trace heap free bytes=" + String(rtcTraceBeforeReset.heapFree) + "\n"), htmlEscape)) return false;
+        if (!streamReportPart(client, ("RTC trace max free block bytes=" + String(rtcTraceBeforeReset.maxFreeBlock) + "\n"), htmlEscape)) return false;
+        if (!streamReportPart(client, ("RTC trace heap fragmentation percent=" +
+             String(rtcTraceBeforeReset.heapFragmentation) + "\n"), htmlEscape)) return false;
     } else {
-        d += "UNAVAILABLE\n";
+        if (!streamReportPart(client, ("UNAVAILABLE\n"), htmlEscape)) return false;
     }
-    d += "External RST clear failed=" +
-         String(recoveryResetClearFailed ? "YES" : "NO") + "\n";
-    d += "Recovery exit: successful OTA, external RST pin, or /restart-normal\n";
-    d += "Exception cause=" + String(recoveryIncident.exccause) + "\n";
+    if (!streamReportPart(client, ("External RST clear failed=" +
+         String(recoveryResetClearFailed ? "YES" : "NO") + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Recovery exit: successful OTA, external RST pin, or /restart-normal\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Exception cause=" + String(recoveryIncident.exccause) + "\n"), htmlEscape)) return false;
     char address[20];
     snprintf(address, sizeof(address), "0x%08lX", (unsigned long)recoveryIncident.epc1);
-    d += "EPC1=" + String(address) + "\n";
+    if (!streamReportPart(client, ("EPC1=" + String(address) + "\n"), htmlEscape)) return false;
     snprintf(address, sizeof(address), "0x%08lX", (unsigned long)recoveryIncident.epc2);
-    d += "EPC2=" + String(address) + "\n";
+    if (!streamReportPart(client, ("EPC2=" + String(address) + "\n"), htmlEscape)) return false;
     snprintf(address, sizeof(address), "0x%08lX", (unsigned long)recoveryIncident.epc3);
-    d += "EPC3=" + String(address) + "\n";
+    if (!streamReportPart(client, ("EPC3=" + String(address) + "\n"), htmlEscape)) return false;
     snprintf(address, sizeof(address), "0x%08lX", (unsigned long)recoveryIncident.excvaddr);
-    d += "EXCVADDR=" + String(address) + "\n";
+    if (!streamReportPart(client, ("EXCVADDR=" + String(address) + "\n"), htmlEscape)) return false;
     snprintf(address, sizeof(address), "0x%08lX", (unsigned long)recoveryIncident.depc);
-    d += "DEPC=" + String(address) + "\n";
-    d += "Current boot reason=" + String(resetReasonLabel(currentBootReset.reason)) +
-         " (" + String(currentBootReset.reason) + ")\n";
-    d += "ESP reset information=" + ESP.getResetInfo() + "\n";
-    d += "Chip ID=" + String(ESP.getChipId(), HEX) + "\n";
-    d += "CPU MHz=" + String(ESP.getCpuFreqMHz()) + "\n";
-    d += "Core version=" + ESP.getCoreVersion() + "\n";
-    d += "SDK version=" + String(ESP.getSdkVersion()) + "\n";
-    d += "Uptime seconds=" + String(millis()/1000UL) + "\n";
-    d += "Free heap bytes=" + String(ESP.getFreeHeap()) + "\n";
+    if (!streamReportPart(client, ("DEPC=" + String(address) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Current boot reason=" + String(resetReasonLabel(currentBootReset.reason)) +
+         " (" + String(currentBootReset.reason) + ")\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("ESP reset information=" + ESP.getResetInfo() + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Chip ID=" + String(ESP.getChipId(), HEX) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("CPU MHz=" + String(ESP.getCpuFreqMHz()) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Core version=" + ESP.getCoreVersion() + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("SDK version=" + String(ESP.getSdkVersion()) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Uptime seconds=" + String(millis()/1000UL) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Free heap bytes=" + String(ESP.getFreeHeap()) + "\n"), htmlEscape)) return false;
 #if defined(UMM_INFO)
-    d += "Maximum free block bytes=" + String(ESP.getMaxFreeBlockSize()) + "\n";
-    d += "Heap fragmentation percent=" + String(ESP.getHeapFragmentation()) + "\n";
+    if (!streamReportPart(client, ("Maximum free block bytes=" + String(ESP.getMaxFreeBlockSize()) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Heap fragmentation percent=" + String(ESP.getHeapFragmentation()) + "\n"), htmlEscape)) return false;
 #endif
-    d += "Free contiguous stack bytes=" + String(ESP.getFreeContStack()) + "\n";
-    d += "Free sketch space bytes=" + String(ESP.getFreeSketchSpace()) + "\n";
-    d += "Flash configured bytes=" + String(ESP.getFlashChipSize()) + "\n";
-    d += "Flash actual bytes=" + String(ESP.getFlashChipRealSize()) + "\n";
-    d += "Wi-Fi status=" + String((int)WiFi.status()) + "\n";
-    d += "Static local IP=" + WiFi.localIP().toString() + "\n";
-    d += "Gateway=" + WiFi.gatewayIP().toString() + "\n";
-    d += "Subnet=" + WiFi.subnetMask().toString() + "\n";
-    d += "DNS=" + WiFi.dnsIP().toString() + "\n";
+    if (!streamReportPart(client, ("Free contiguous stack bytes=" + String(ESP.getFreeContStack()) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Free sketch space bytes=" + String(ESP.getFreeSketchSpace()) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Flash configured bytes=" + String(ESP.getFlashChipSize()) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Flash actual bytes=" + String(ESP.getFlashChipRealSize()) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Wi-Fi status=" + String((int)WiFi.status()) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Static local IP=" + WiFi.localIP().toString() + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Gateway=" + WiFi.gatewayIP().toString() + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Subnet=" + WiFi.subnetMask().toString() + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("DNS=" + WiFi.dnsIP().toString() + "\n"), htmlEscape)) return false;
     if (WiFi.status() == WL_CONNECTED) {
-        d += "Wi-Fi RSSI dBm=" + String(WiFi.RSSI()) + "\n";
-        d += "Web root requests=" + String(webRootRequestCount) + "\n";
-        d += "Web rapid reloads retried=" + String(webRootRateLimitedCount) + "\n";
-        d += "Web memory busy=" + String(webRootBusyCount) + "\n";
-        d += "Web write aborts=" + String(webRootWriteAbortCount) + "\n";
-        d += "Web sockets explicitly closed=" + String(webRootForcedCloseCount) + "\n";
-        d += "Wi-Fi channel=" + String(WiFi.channel()) + "\n";
+        if (!streamReportPart(client, ("Wi-Fi RSSI dBm=" + String(WiFi.RSSI()) + "\n"), htmlEscape)) return false;
+        if (!streamReportPart(client, ("Web root requests=" + String(webRootRequestCount) + "\n"), htmlEscape)) return false;
+        if (!streamReportPart(client, ("Web rapid reloads retried=" + String(webRootRateLimitedCount) + "\n"), htmlEscape)) return false;
+        if (!streamReportPart(client, ("Web memory busy=" + String(webRootBusyCount) + "\n"), htmlEscape)) return false;
+        if (!streamReportPart(client, ("Web write aborts=" + String(webRootWriteAbortCount) + "\n"), htmlEscape)) return false;
+        if (!streamReportPart(client, ("Web sockets explicitly closed=" + String(webRootForcedCloseCount) + "\n"), htmlEscape)) return false;
+        if (!streamReportPart(client, ("Wi-Fi channel=" + String(WiFi.channel()) + "\n"), htmlEscape)) return false;
     }
-    d += "Recovery OTA active=" + String(recoveryOtaInProgress ? "YES" : "WAITING") + "\n";
-    d += "OTA recovery clear failed=" + String(recoveryOtaClearFailed ? "YES" : "NO") + "\n";
-    d += "AP attempts=" + String(credentialApAttempts) + " last failure=" +
+    if (!streamReportPart(client, ("Recovery OTA active=" + String(recoveryOtaInProgress ? "YES" : "WAITING") + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("OTA recovery clear failed=" + String(recoveryOtaClearFailed ? "YES" : "NO") + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("AP attempts=" + String(credentialApAttempts) + " last failure=" +
          String(credentialApLastFailure) + " (1=radio,2=IP,3=start), heap=" +
-         String(credentialApHeapAtAttempt) + "\n";
-    d += "OLED failure hold ms=" + String(OLED_DIAGNOSTIC_HOLD_MS) +
-         " pending=" + String(oledDiagnosticCount) + "\n";
+         String(credentialApHeapAtAttempt) + "\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("OLED failure hold ms=" + String(OLED_DIAGNOSTIC_HOLD_MS) +
+         " pending=" + String(oledDiagnosticCount) + "\n"), htmlEscape)) return false;
     if (oledDiagnosticCount) {
-        d += "OLED diagnostic=" + String(oledDiagnostics[0].title) + "\n";
-        d += "OLED cause=" + String(oledDiagnostics[0].detail) + "\n";
+        if (!streamReportPart(client, ("OLED diagnostic=" + String(oledDiagnostics[0].title) + "\n"), htmlEscape)) return false;
+        if (!streamReportPart(client, ("OLED cause=" + String(oledDiagnostics[0].detail) + "\n"), htmlEscape)) return false;
     }
-    d += "Only Recovery HTTP endpoints are available: /, /debug, /debug.txt, /restart-normal, POST /esp-restart.\n";
-    d += "Successful OTA or Restart normally clears the recovery incident before reboot.\n";
-    d += "If clearing the incident fails, Recovery remains latched. External RST also clears Recovery.\n";
-    d += "No passwords are shown in this diagnostic report.\n";
-    return d;
+    if (!streamReportPart(client, ("Only Recovery HTTP endpoints are available: /, /debug, /debug.txt, /restart-normal, POST /esp-restart.\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("Successful OTA or Restart normally clears the recovery incident before reboot.\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("If clearing the incident fails, Recovery remains latched. External RST also clears Recovery.\n"), htmlEscape)) return false;
+    if (!streamReportPart(client, ("No passwords are shown in this diagnostic report.\n"), htmlEscape)) return false;
+    return true;
 }
 
 void handleRecoveryText() {
     WebResponseScope responseScope;
     if (!requireApWebPin()) return;
-    server.sendHeader("Cache-Control", "no-store");
-    server.send(200, "text/plain; charset=utf-8", buildRecoveryReport());
+    WiFiClient client=server.client();
+    static const char header[]=
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n"
+        "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
+    if (!writeRootBytes(client,reinterpret_cast<const uint8_t*>(header),sizeof(header)-1))return;
+    streamRecoveryReport(client,false);
 }
 
 void handleRecoveryPage() {
     WebResponseScope responseScope;
     if (!requireApWebPin()) return;
-    String report = buildRecoveryReport();
-    String html;
-    html.reserve(report.length() + 650);
-    html += F("<!doctype html><html><head><meta charset='utf-8'>"
-              "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-              "<meta http-equiv='refresh' content='10'>"
-              "<title>" DEVICE_LABEL " RECOVERY</title>"
-              "<style>body{font:22px/1.35 Arial,sans-serif;margin:15px auto;padding:12px;"
-              "max-width:900px}pre{white-space:pre-wrap;overflow-wrap:anywhere;"
-              "border:1px solid #bbb;padding:12px;background:#f5f5f5}"
-              "h1{color:#b00020}</style><style>body{font:22px/1.35 Arial,sans-serif;max-width:760px;margin:auto;padding:10px;color:#142431}h1,h2,small{font-size:inherit}pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}input,button{font:inherit}</style></head><body>"
-              "<h1>OTA-ONLY RECOVERY</h1>"
-              "<p>Normal measurement mode is locked. IDE_OTA remains available on LAN. "
-              "A successful OTA clears Recovery and the new firmware starts normally after reboot. "
-              "Physical RST also clears Recovery.</p>"
-              "<p><a href='/restart-normal' "
-              "onclick=\"return confirm('Clear the recovery incident and restart normal operation?');\">"
-              "<b>Restart normally</b></a></p>"
-              "<form action='/esp-restart' method='post' "
-              "onsubmit=\"return confirm('Restart ESP but KEEP OTA-only Recovery active?');\">"
-              "<button type='submit'>ESP Restart (keep Recovery)</button></form>"
-              "<a href='/debug.txt'>Copy/download plain-text diagnostics</a><pre>");
-    for (size_t i=0; i<report.length(); ++i) {
-        char ch = report[i];
-        if (ch == '&') html += F("&amp;");
-        else if (ch == '<') html += F("&lt;");
-        else if (ch == '>') html += F("&gt;");
-        else html += ch;
-    }
-    html += F("</pre></body></html>");
-    server.sendHeader("Cache-Control", "no-store");
-    server.send(200, "text/html; charset=utf-8", html);
+    WiFiClient client=server.client();
+    static const char header[]=
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+        "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
+    if (!writeRootBytes(client,reinterpret_cast<const uint8_t*>(header),sizeof(header)-1))return;
+    PGM_P head=PSTR(
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<meta http-equiv='refresh' content='10'>"
+        "<title>" DEVICE_LABEL " RECOVERY</title>"
+        "<style>body{font:22px/1.35 Arial,sans-serif;max-width:760px;margin:auto;"
+        "padding:10px;color:#142431}pre{white-space:pre-wrap;overflow-wrap:anywhere;"
+        "border:1px solid #bbb;padding:12px;background:#f5f5f5}</style></head><body>"
+        "<h1>OTA-ONLY RECOVERY</h1>"
+        "<p>Normal measurement mode is locked. IDE_OTA remains available on LAN. "
+        "A successful OTA clears Recovery and the new firmware starts normally after reboot. "
+        "Physical RST also clears Recovery.</p>"
+        "<p><a href='/restart-normal' "
+        "onclick=\"return confirm('Clear the recovery incident and restart normal operation?');\">"
+        "<b>Restart normally</b></a></p>"
+        "<form action='/esp-restart' method='post' "
+        "onsubmit=\"return confirm('Restart ESP but KEEP OTA-only Recovery active?');\">"
+        "<button type='submit'>ESP Restart (keep Recovery)</button></form>"
+        "<a href='/debug.txt'>Copy/download plain-text diagnostics</a><pre>");
+    if(!writeRootProgmemViaRam(client,head,strlen_P(head)))return;
+    if(!streamRecoveryReport(client,true))return;
+    PGM_P tail=PSTR("</pre></body></html>");
+    writeRootProgmemViaRam(client,tail,strlen_P(tail));
 }
 
 // POST only; intentionally keeps persistent recovery latch intact.
@@ -2747,11 +2775,7 @@ void handleRecoveryRestartNormal() {
     recoveryIncident = RecoveryRecord();
     recoveryIncidentPersistent = false;
 
-    server.sendHeader("Cache-Control", "no-store");
-    server.send_P(
-        200,
-        PSTR("text/html; charset=utf-8"),
-        PSTR("<!doctype html><html><head><meta charset='utf-8'>"
+    safeFlashResponse(200, "text/html; charset=utf-8", PSTR("<!doctype html><html><head><meta charset='utf-8'>"
              "<meta name='viewport' content='width=device-width,initial-scale=1'>"
              "<title>Restarting</title><style>body{font:22px/1.35 Arial,sans-serif;max-width:760px;margin:auto;padding:10px;color:#142431}h1,h2,small{font-size:inherit}pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}input,button{font:inherit}</style></head><body>"
              "<h2>Recovery cleared</h2>"
@@ -3019,11 +3043,10 @@ void handleForceOtaRecovery() {
     }
 
     clearRtcCrashTrace();
-    server.sendHeader("Cache-Control", "no-store");
-    server.send(200, "text/html; charset=utf-8",
+    safeFlashResponse(200, "text/html; charset=utf-8", PSTR(
                 "<!doctype html><html><body><h2>OTA-ONLY Recovery requested</h2>"
                 "<p>Restarting. IDE_OTA and mDNS will be enabled in Recovery.</p>"
-                "</body></html>");
+                "</body></html>"));
     forceRecoveryRestartPending = true;
 #if PLATFORM_LOCAL_CONTROL_APPLICATION
     applicationPrepareOta();
