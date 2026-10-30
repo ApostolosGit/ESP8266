@@ -1886,7 +1886,8 @@ bool publishMeterHealth() {
         "\"oled\":\"%s\",\"profile\":\"%s\",\"ota_protocol\":%u,"
         "\"chip_id\":%lu,\"dual_zone\":%s,\"meter_ok\":%s,\"read_attempted\":%s,"
         "\"has_sample\":%s,\"last_sample_age_ms\":%s,\"read_failures\":%lu,"
-        "\"error\":\"%s\",\"rssi\":%d,"\n        "\"heap_free\":%lu,\"heap_largest\":%u,\"web_deferred\":%lu}"),
+        "\"error\":\"%s\",\"rssi\":%d,"
+        "\"heap_free\":%lu,\"heap_largest\":%u,\"web_deferred\":%lu}"),
         DEVICE_KIND, mqttDeviceId, VERSION, APPLICATION_ID, PLATFORM_VERSION, DRIVER_ID,
         OLED_ID, OTA_PROFILE_ID, (unsigned)OTA_PROTOCOL_VERSION, (unsigned long)ESP.getChipId(),
         applicationDualZoneEnabled() ? "true" : "false", lastMeterReadOk ? "true" : "false",
@@ -4055,11 +4056,11 @@ void handleRoot() {
     markCrashStage(CRASH_STAGE_WEB_ROOT, heap);
     char body[224];
     const int n=snprintf_P(body,sizeof(body),
-        PSTR("Ventilation v7.03 WEB DIAGNOSTIC\\n"
-             "Firmware=7.03\\n"
-             "MQTT and fan control unchanged\\n"
-             "Root page intentionally replaced by minimal response\\n"
-             "Heap=%lu Block=%u Deferred=%lu\\n"),
+        PSTR("Ventilation v7.03 WEB DIAGNOSTIC\n"
+             "Firmware=7.03\n"
+             "MQTT and fan control unchanged\n"
+             "Root page intentionally replaced by minimal response\n"
+             "Heap=%lu Block=%u Deferred=%lu\n"),
         (unsigned long)heap,(unsigned)ESP.getMaxFreeBlockSize(),
         (unsigned long)webRootBusyCount);
     if (n<=0 || n>=(int)sizeof(body)) return;
