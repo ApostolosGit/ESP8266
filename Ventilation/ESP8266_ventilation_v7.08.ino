@@ -3046,7 +3046,7 @@ void handleNormalEspRestart() {
         return;
     }
     if (recoveryMode || credentialRestartPending || forceRecoveryRestartPending ||
-        mqttAdminRestartPending || remoteOtaInProgress) {
+        mqttAdminRestartPending || mqttAdminCommandPending || recoveryOtaInProgress) {
         safeFlashResponse(409, "text/plain; charset=utf-8", PSTR("Restart refused: another recovery, OTA or restart operation is active."));
         return;
     }
