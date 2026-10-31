@@ -2998,14 +2998,10 @@ void handleForceOtaRecoveryConfirm() {
                 "<title>Force OTA Recovery</title><style>body{font:22px/1.35 Arial,sans-serif;max-width:760px;margin:auto;padding:10px;color:#142431}h1,h2,small{font-size:inherit}pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}input,button{font:inherit}</style></head><body>"
                 "<h2>Force OTA-ONLY Recovery</h2>"
                 "<p>This restarts the ESP8266 into recovery mode. Measurements and MQTT will be disabled until OTA succeeds or Recovery is exited.</p>"
-                "<form id='normal-restart-form' method='post' action='/restart-esp' "
-                "onsubmit=\"return confirm('Restart ESP normally?');\"></form>"
                 "<form method='post' action='/force-ota-recovery'>"
                 "<label><input type='checkbox' name='confirm' value='ENTER' required> "
                 "Enter OTA-ONLY Recovery after restart.</label><br>"
-                "<button type='submit' form='normal-restart-form' name='confirm' value='RESTART' "
-                "style='border:0;background:none;color:#00e;text-decoration:underline;padding:0;cursor:pointer'>"
-                "Restart ESP (normal reboot)</button><br><br>"
+                "<a href='/restart-esp'>Restart ESP (normal reboot)</a><br><br>"
                 "<button type='submit'>ENTER OTA-ONLY RECOVERY</button></form>"
                 "<p><a href='/'>Cancel</a></p></body></html>"));
 }
@@ -3041,27 +3037,38 @@ void handleForceOtaRecovery() {
     forceRecoveryRestartRequestedMs = millis();
 }
 
-void handleNormalEspRestart() {
+// Same GET-confirmation-then-POST flow as ESP32-C3 CommonPlatform.
+void handleRestartEspConfirm() {
     WebResponseScope responseScope;
     if (!requireApWebPin()) return;
-    if (server.arg("confirm") != "RESTART") {
-        safeFlashResponse(400, "text/plain; charset=utf-8", PSTR("Restart confirmation required."));
+    if (recoveryMode) {
+        safeFlashResponse(409, "text/plain; charset=utf-8", PSTR("ESP is in Recovery; use /restart-normal instead."));
         return;
     }
-    if (recoveryMode || credentialRestartPending || forceRecoveryRestartPending ||
-        mqttAdminRestartPending || mqttAdminCommandPending || recoveryOtaInProgress) {
-        safeFlashResponse(409, "text/plain; charset=utf-8", PSTR("Restart refused: another recovery, OTA or restart operation is active."));
-        return;
-    }
-    mqttAdminRestartPending = true;
-    mqttAdminRestartRequestedMs = millis();
     safeFlashResponse(200, "text/html; charset=utf-8", PSTR(
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<title>Restart ESP</title></head><body>"
-        "<h2>Restart ESP requested</h2>"
-        "<p>Normal reboot. Stored Wi-Fi/MQTT credentials and history are preserved.</p>"
-        "<p><a href='/'>Return to dashboard</a></p></body></html>"));
+        "<h2>Restart ESP8266</h2>"
+        "<p>Normal restart only. Wi-Fi/MQTT settings are preserved. "
+        "This does NOT enter OTA-ONLY Recovery.</p>"
+        "<form method='post' action='/restart-esp'>"
+        "<button type='submit'>CONFIRM ESP RESTART</button></form>"
+        "<p><a href='/force-ota-recovery-confirm'>Cancel</a></p>"
+        "</body></html>"));
+}
+void handleRestartEsp() {
+    WebResponseScope responseScope;
+    if (!requireApWebPin()) return;
+    if (recoveryMode || credentialRestartPending || forceRecoveryRestartPending ||
+        mqttAdminRestartPending || mqttAdminCommandPending || recoveryOtaInProgress) {
+        safeFlashResponse(409, "text/plain; charset=utf-8",
+            PSTR("Restart unavailable during Recovery, OTA or a pending restart."));
+        return;
+    }
+    mqttAdminRestartPending = true;
+    mqttAdminRestartRequestedMs = millis();
+    safeFlashResponse(200, "text/plain; charset=utf-8", PSTR("ESP8266 restarting normally."));
 }
 
 void handleNetworkDebugPage() {
@@ -3629,7 +3636,8 @@ void configureWebRoutes() {
         if (credentialPortalOnly) handleCredentialSetupPage();
         else handleRoot();
     });
-    server.on("/restart-esp", HTTP_POST, handleNormalEspRestart);
+    server.on("/restart-esp", HTTP_GET, handleRestartEspConfirm);
+    server.on("/restart-esp", HTTP_POST, handleRestartEsp);
     server.on("/force-ota-recovery-confirm", HTTP_GET, handleForceOtaRecoveryConfirm);
     server.on("/force-ota-recovery", HTTP_POST, handleForceOtaRecovery);
     server.onNotFound([]() {
