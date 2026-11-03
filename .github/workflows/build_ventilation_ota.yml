@@ -29,7 +29,10 @@ jobs:
           arduino-cli lib install "OneWire"
           arduino-cli lib install "DallasTemperature"
           arduino-cli lib install "DHT sensor library"
-          arduino-cli lib install "DHTesp"
+          # DHTesp is archived and unavailable in Arduino Library Manager.
+          # Use its original ESP8266-compatible upstream directly.
+          mkdir -p "$HOME/Arduino/libraries"
+          git clone --depth=1 https://github.com/beegee-tokyo/DHTesp.git "$HOME/Arduino/libraries/DHTesp"
           arduino-cli lib install "PubSubClient"
           arduino-cli core list
           arduino-cli lib list
