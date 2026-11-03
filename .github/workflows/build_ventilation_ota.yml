@@ -1,0 +1,68 @@
+name: Build Ventilation OTA diagnostic BIN
+on:
+  push:
+    branches:
+      - build/ventilation-v7-10-breadcrumbs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout isolated branch
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP8266 core 2.7.2 and Arduino libraries
+        shell: bash
+        run: |
+          set -euxo pipefail
+          INDEX_URL=https://arduino.esp8266.com/stable/package_esp8266com_index.json
+          arduino-cli core update-index --additional-urls "$INDEX_URL"
+          arduino-cli core install "esp8266:esp8266@2.7.2" --additional-urls "$INDEX_URL"
+          arduino-cli lib install "OneWire"
+          arduino-cli lib install "DallasTemperature"
+          arduino-cli lib install "DHT sensor library"
+          arduino-cli lib install "DHTesp"
+          arduino-cli lib install "PubSubClient"
+          arduino-cli core list
+          arduino-cli lib list
+
+      - name: Build exact v7.10 diagnostic sketch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/ESP8266_ventilation_v7_10_breadcrumbs" "$RUNNER_TEMP/compiled"
+          cp Ventilation/ESP8266_ventilation_v7.10_breadcrumbs.ino "$RUNNER_TEMP/ESP8266_ventilation_v7_10_breadcrumbs/ESP8266_ventilation_v7_10_breadcrumbs.ino"
+          arduino-cli compile \
+            --fqbn "esp8266:esp8266:nodemcuv2:eesz=4M1M" \
+            --additional-urls "https://arduino.esp8266.com/stable/package_esp8266com_index.json" \
+            --warnings all \
+            --output-dir "$RUNNER_TEMP/compiled" \
+            "$RUNNER_TEMP/ESP8266_ventilation_v7_10_breadcrumbs"
+          BIN=$(find "$RUNNER_TEMP/compiled" -type f -name '*.bin' | head -1)
+          ELF=$(find "$RUNNER_TEMP/compiled" -type f -name '*.elf' | head -1)
+          test -s "$BIN"
+          test -s "$ELF"
+          cp "$BIN" "$RUNNER_TEMP/compiled/Ventilation_v7.10_breadcrumbs_OTA.bin"
+          cp "$ELF" "$RUNNER_TEMP/compiled/Ventilation_v7.10_breadcrumbs.elf"
+          sha256sum "$RUNNER_TEMP/compiled/Ventilation_v7.10_breadcrumbs_OTA.bin" > "$RUNNER_TEMP/compiled/SHA256.txt"
+          printf 'VERSION=7.10\nAPPLICATION=ventilation\nOTA_PROFILE=ventilation-3ds18b20-2dht11-none\nESP8266_CORE=2.7.2\nFQBN=esp8266:esp8266:nodemcuv2:eesz=4M1M\nOLED_TYPE=0\nFLASH=4MB\n' > "$RUNNER_TEMP/compiled/build_metadata.txt"
+          ls -lh "$RUNNER_TEMP/compiled"
+
+      - name: Upload OTA binary + ELF
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ventilation-v7.10-OTA-diagnostics
+          path: |
+            ${{ runner.temp }}/compiled/Ventilation_v7.10_breadcrumbs_OTA.bin
+            ${{ runner.temp }}/compiled/Ventilation_v7.10_breadcrumbs.elf
+            ${{ runner.temp }}/compiled/SHA256.txt
+            ${{ runner.temp }}/compiled/build_metadata.txt
+          if-no-files-found: error
