@@ -44,7 +44,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           old=Path('Ventilation/ESP8266_ventilation_v7.10_breadcrumbs.ino').read_text()
-          new=Path('Ventilation/ESP8266_ventilation_v7_11_offline_first_TEST.ino').read_text()
+          new=Path('Ventilation/ESP8266_ventilation_v7.11_offline_first_TEST.ino').read_text()
           for marker in ('#define VERSION "7.11"', '#define PLATFORM_VERSION "1.06"',
                          '#define OLED_TYPE 0', 'WiFi.setSleepMode(WIFI_NONE_SLEEP)',
                          'ds.setWaitForConversion(false)',
@@ -75,7 +75,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p "$RUNNER_TEMP/ESP8266_ventilation_v7_11_offline_first_TEST" "$RUNNER_TEMP/compiled"
-          cp Ventilation/ESP8266_ventilation_v7.10_breadcrumbs.ino "$RUNNER_TEMP/ESP8266_ventilation_v7_11_offline_first_TEST/ESP8266_ventilation_v7_11_offline_first_TEST.ino"
+          cp Ventilation/ESP8266_ventilation_v7.11_offline_first_TEST.ino "$RUNNER_TEMP/ESP8266_ventilation_v7_11_offline_first_TEST/ESP8266_ventilation_v7_11_offline_first_TEST.ino"
           arduino-cli compile \
             --fqbn "esp8266:esp8266:nodemcuv2:eesz=4M2M" \
             --additional-urls "https://arduino.esp8266.com/stable/package_esp8266com_index.json" \
