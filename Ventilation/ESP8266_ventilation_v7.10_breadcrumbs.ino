@@ -107,6 +107,7 @@ extern "C" {
 }
 struct RtcOledDiagnostic;
 struct DeviceCredentialRecord;
+struct LegacyVentCredentialRecord; // Required by Arduino CLI auto-prototype generation.
 struct RtcCrashTrace;
 struct RecoveryRecord;
 struct OledDiagnostic;
