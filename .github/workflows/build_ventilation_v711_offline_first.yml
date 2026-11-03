@@ -1,0 +1,104 @@
+name: Build Ventilation v7.11 offline-first candidate
+on:
+  push:
+    branches:
+      - test/ventilation-v7-11-offline-first
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout isolated branch
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP8266 core 2.7.2 and Arduino libraries
+        shell: bash
+        run: |
+          set -euxo pipefail
+          INDEX_URL=https://arduino.esp8266.com/stable/package_esp8266com_index.json
+          arduino-cli core update-index --additional-urls "$INDEX_URL"
+          arduino-cli core install "esp8266:esp8266@2.7.2" --additional-urls "$INDEX_URL"
+          arduino-cli lib install "OneWire"
+          arduino-cli lib install "DallasTemperature"
+          arduino-cli lib install "DHT sensor library"
+          # DHTesp is archived and unavailable in Arduino Library Manager.
+          # Use its original ESP8266-compatible upstream directly.
+          mkdir -p "$HOME/Arduino/libraries"
+          git clone --depth=1 https://github.com/beegee-tokyo/DHTesp.git "$HOME/Arduino/libraries/DHTesp"
+          arduino-cli lib install "PubSubClient"
+          arduino-cli core list
+          arduino-cli lib list
+
+      - name: Check offline-first safety invariants
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          old=Path('Ventilation/ESP8266_ventilation_v7.10_breadcrumbs.ino').read_text()
+          new=Path('Ventilation/ESP8266_ventilation_v7_11_offline_first_TEST.ino').read_text()
+          for marker in ('#define VERSION "7.11"', '#define PLATFORM_VERSION "1.06"',
+                         '#define OLED_TYPE 0', 'WiFi.setSleepMode(WIFI_NONE_SLEEP)',
+                         'ds.setWaitForConversion(false)',
+                         'MQTT_TRANSPORT_COOLDOWN_MS = 60000UL',
+                         'Local completed samples', 'networkStackRecoveryPending'):
+              assert marker in new, f'Missing: {marker}'
+          for marker in ('#define OTA_PROTOCOL_VERSION 2',
+                         '#define OTA_PROFILE_PREFIX "ventilation-3ds18b20-2dht11"',
+                         'void applicationPrepareOta()', 'void applicationEarlyInitialize()',
+                         'void applicationServiceLocal(unsigned long now)',
+                         'digitalWrite(GPIO_FAN,FAN_OFF_LEVEL)'):
+              assert marker in new and marker in old, f'Safety invariant: {marker}'
+          a=new.index('bool serviceNetworkStackRecovery(unsigned long now) {')
+          b=new.index('void serviceWiFiReconnect(unsigned long now) {',a)
+          selfheal=new[a:b]
+          for forbidden in ('server.stop()', 'WiFi.disconnect(', 'WiFi.mode(WIFI_OFF)', 'ESP.restart()'):
+              assert forbidden not in selfheal.split('return false;',1)[0], 'Unexpected network reset'
+          a=new.index('void loop() {')
+          b=new.index('// END MODULE: MAIN SETUP / LOOP',a)
+          loop=new[a:b]
+          assert loop.index('applicationServiceLocal(now);') < loop.index('serviceNetworkPriority(millis());')
+          assert new.count('ds.setWaitForConversion(false)')>=1
+          print('PASS: offline-first safety/static invariants')
+          PY
+
+      - name: Build Ventilation v7.11 offline-first diagnostic sketch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/ESP8266_ventilation_v7_11_offline_first_TEST" "$RUNNER_TEMP/compiled"
+          cp Ventilation/ESP8266_ventilation_v7.10_breadcrumbs.ino "$RUNNER_TEMP/ESP8266_ventilation_v7_11_offline_first_TEST/ESP8266_ventilation_v7_11_offline_first_TEST.ino"
+          arduino-cli compile \
+            --fqbn "esp8266:esp8266:nodemcuv2:eesz=4M2M" \
+            --additional-urls "https://arduino.esp8266.com/stable/package_esp8266com_index.json" \
+            --warnings all \
+            --output-dir "$RUNNER_TEMP/compiled" \
+            "$RUNNER_TEMP/ESP8266_ventilation_v7_11_offline_first_TEST"
+          BIN=$(find "$RUNNER_TEMP/compiled" -type f -name '*.bin' | head -1)
+          ELF=$(find "$RUNNER_TEMP/compiled" -type f -name '*.elf' | head -1)
+          test -s "$BIN"
+          test -s "$ELF"
+          cp "$BIN" "$RUNNER_TEMP/compiled/Ventilation_v7.11_offline_first_TEST_OTA.bin"
+          cp "$ELF" "$RUNNER_TEMP/compiled/Ventilation_v7.11_offline_first_TEST.elf"
+          sha256sum "$RUNNER_TEMP/compiled/Ventilation_v7.11_offline_first_TEST_OTA.bin" > "$RUNNER_TEMP/compiled/SHA256.txt"
+          printf 'VERSION=7.11\nAPPLICATION=ventilation\nOTA_PROFILE=ventilation-3ds18b20-2dht11-none\nESP8266_CORE=2.7.2\nFQBN=esp8266:esp8266:nodemcuv2:eesz=4M2M\nOLED_TYPE=0\nFLASH=4MB\nLITTLEFS=2MB\n' > "$RUNNER_TEMP/compiled/build_metadata.txt"
+          ls -lh "$RUNNER_TEMP/compiled"
+
+      - name: Upload OTA binary + ELF
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ventilation-v7.11-OTA-candidate
+          path: |
+            ${{ runner.temp }}/compiled/Ventilation_v7.11_offline_first_TEST_OTA.bin
+            ${{ runner.temp }}/compiled/Ventilation_v7.11_offline_first_TEST.elf
+            ${{ runner.temp }}/compiled/SHA256.txt
+            ${{ runner.temp }}/compiled/build_metadata.txt
+          if-no-files-found: error
