@@ -55,7 +55,7 @@ jobs:
             assert marker in s, f'Missing invariant: {marker}'
           sensor=s[s.index('void sampleHardware() {'):s.index('void serviceDhtSample(',s.index('void sampleHardware() {'))]
           dht=s[s.index('void serviceDhtSample(unsigned long now) {'):s.index('bool isPausePeriod()',s.index('void serviceDhtSample(unsigned long now) {'))]
-          assert sensor.count('ds.getTempC(')==1
+          assert sensor.count('ds.getTempC(')==3
           assert 'dhtOutside.readHumidity()' not in sensor and 'dhtInside.readHumidity()' not in sensor
           assert dht.count('dhtOutside.readHumidity()')==1
           assert dht.count('dhtInside.readHumidity()')==1
