@@ -91,7 +91,7 @@ jobs:
             assert 'void handleRestartEsp()' in source
             assert 'WDT_COUNT_FILE_A' in source and 'WDT_COUNT_FILE_B' in source
             assert 'recordWatchdogBoot()' in source
-                assert 'const bool watchdogStored = watchdogFault && recordWatchdogBoot();' in source
+              assert 'const bool watchdogStored = watchdogFault && recordWatchdogBoot();' in source
             assert 'recoveryMode = true' in source
           # The same counter module must exist unchanged in both source variants.
           marker='// CommonPlatform 1.07: persistent, deliberately-reset watchdog count.'
