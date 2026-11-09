@@ -5407,8 +5407,8 @@ bool applicationAppendDebug(WiFiClient& client) {
   if(n<=0||n>=(int)sizeof(line)||
      !writeRootBytes(client,reinterpret_cast<const uint8_t*>(line),(size_t)n))return false;
   n=snprintf(line,sizeof(line),
-    "DHT out reads=%lu in reads=%lu low-memory skips=%lu failures=%lu last ms=%lu\\n"
-    "DHT pre-read stack=%lu heap=%lu max block=%lu next=%s\\n",
+    "DHT out reads=%lu in reads=%lu low-memory skips=%lu failures=%lu last ms=%lu\n"
+    "DHT pre-read stack=%lu heap=%lu max block=%lu next=%s\n",
     (unsigned long)ventDhtOutsideReads,(unsigned long)ventDhtInsideReads,
     (unsigned long)ventDhtLowMemorySkips,(unsigned long)ventDhtReadFailures,
     (unsigned long)ventDhtLastDurationMs,
