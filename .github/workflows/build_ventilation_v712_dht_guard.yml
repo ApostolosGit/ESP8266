@@ -1,0 +1,139 @@
+name: Build Ventilation v7.12 DHT11 watchdog candidate
+on:
+  pull_request:
+    paths:
+      - 'Ventilation/ESP8266_ventilation_v7.12_dht_watchdog_TEST.ino'
+      - '.github/workflows/build_ventilation_v712_dht_guard.yml'
+  push:
+    branches: [main, fix/ventilation-v7-12-dht-watchdog]
+    paths:
+      - 'Ventilation/ESP8266_ventilation_v7.12_dht_watchdog_TEST.ino'
+      - '.github/workflows/build_ventilation_v712_dht_guard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@v4
+
+      - name: Validate fan fail-safe, OTA profile, DHT guards and tracing
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('Ventilation/ESP8266_ventilation_v7.12_dht_watchdog_TEST.ino').read_text()
+          required=(
+            '#define VERSION "7.12"',
+            '#define BUILD_DATE "09/11/2026"',
+            '#define PLATFORM_VERSION "1.06"',
+            '#define OLED_TYPE 0',
+            '#define SITE_IP_D 81',
+            '#define OTA_PROTOCOL_VERSION 2',
+            '#define OTA_PROFILE_PREFIX "ventilation-3ds18b20-2dht11"',
+            'ds.setWaitForConversion(false)',
+            'WiFi.setSleepMode(WIFI_NONE_SLEEP)',
+            'MQTT_TRANSPORT_COOLDOWN_MS = 60000UL',
+            'CRASH_STAGE_VENT_DHT_OUTSIDE = 106',
+            'CRASH_STAGE_VENT_DHT_INSIDE = 107',
+            'VENT_DHT_MIN_STACK_BYTES = 1536UL',
+            'VENT_DHT_MIN_HEAP_BYTES = 8192UL',
+            'VENT_DHT_MIN_BLOCK_BYTES = 6144UL',
+            'void applicationEarlyInitialize()',
+            'void applicationServiceLocal(unsigned long now)',
+            'void applicationPrepareOta()',
+            'void applyFanControl()',
+            'digitalWrite(GPIO_FAN,FAN_OFF_LEVEL)',
+          )
+          for marker in required:
+            assert marker in s, f'Missing invariant: {marker}'
+          sensor=s[s.index('void sampleHardware() {'):s.index('void serviceDhtSample(',s.index('void sampleHardware() {'))]
+          dht=s[s.index('void serviceDhtSample(unsigned long now) {'):s.index('bool isPausePeriod()',s.index('void serviceDhtSample(unsigned long now) {'))]
+          assert sensor.count('ds.getTempC(')==3
+          assert 'dhtOutside.readHumidity()' not in sensor and 'dhtInside.readHumidity()' not in sensor
+          assert dht.count('dhtOutside.readHumidity()')==1
+          assert dht.count('dhtInside.readHumidity()')==1
+          assert dht.count('dhtOutside.readTemperature()')==1
+          assert dht.count('dhtInside.readTemperature()')==1
+          assert dht.count('yield();')==1
+          assert 'if (!ventCompletedSampleCount) return;' in dht
+          assert 'VENT_DHT_SAMPLE_INTERVAL_MS' in dht
+          assert 'const bool readOutside = ventDhtOutsideNext;' in dht
+          assert 'ventDhtOutsideNext = !ventDhtOutsideNext;' in dht
+          assert dht.index('if (!dhtMemoryReady)') < dht.index('dhtOutside.readHumidity()')
+          assert dht.index('if (!dhtMemoryReady)') < dht.index('dhtInside.readHumidity()')
+          assert '++ventDhtLowMemorySkips;' in dht
+          assert 'humidityOutside=NAN; dhtTemperatureOutside=NAN' in dht
+          assert 'humidityInside=NAN; dhtTemperatureInside=NAN' in dht
+          assert 'CrashTraceScope dhtTrace(readOutside ?' in dht
+          assert 'humidityOutside=dhtOutside.readHumidity();humidityInside=' not in s
+          local=s[s.index('void applicationServiceLocal(unsigned long now) {'):s.index('bool applicationReadMeasurements()',s.index('void applicationServiceLocal(unsigned long now) {'))]
+          assert local.index('sampleHardware();') < local.index('applyFanControl();') < local.index('serviceDhtSample(millis());')
+          fail=s[s.index('void applyFanControl() {'):s.index('void publishVentilationState()',s.index('void applyFanControl() {'))] if 'void publishVentilationState()' in s else s[s.index('void applyFanControl() {'):s.index('void processCommand()',s.index('void applyFanControl() {'))]
+          assert 'ventSafeMode' in fail and 'GPIO_FAN' in fail
+          reset=s[s.index('void applicationEarlyInitialize() {'):s.index('void applicationInitialize()',s.index('void applicationEarlyInitialize() {'))]
+          assert 'digitalWrite(GPIO_FAN,FAN_OFF_LEVEL)' in reset
+          print('V712_DHT_GUARD_AND_FAN_SAFETY=PASS')
+          PY
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP8266 core 2.7.2 and required libraries
+        shell: bash
+        run: |
+          set -euxo pipefail
+          IDX=https://arduino.esp8266.com/stable/package_esp8266com_index.json
+          arduino-cli core update-index --additional-urls "$IDX"
+          arduino-cli core install "esp8266:esp8266@2.7.2" --additional-urls "$IDX"
+          arduino-cli lib install "OneWire"
+          arduino-cli lib install "DallasTemperature"
+          arduino-cli lib install "DHT sensor library"
+          mkdir -p "$HOME/Arduino/libraries"
+          git clone --quiet --depth 1 https://github.com/beegee-tokyo/DHTesp.git "$HOME/Arduino/libraries/DHTesp"
+          arduino-cli lib install "PubSubClient"
+
+      - name: Compile exact headless Ventilation v7.12 4M2M recovery image
+        shell: bash
+        run: |
+          set -euxo pipefail
+          NAME=ESP8266_ventilation_v7_12_dht_watchdog_TEST
+          mkdir -p "$RUNNER_TEMP/$NAME" "$RUNNER_TEMP/compiled"
+          cp Ventilation/ESP8266_ventilation_v7.12_dht_watchdog_TEST.ino "$RUNNER_TEMP/$NAME/$NAME.ino"
+          arduino-cli compile \
+            --fqbn "esp8266:esp8266:nodemcuv2:eesz=4M2M" \
+            --additional-urls https://arduino.esp8266.com/stable/package_esp8266com_index.json \
+            --warnings all --output-dir "$RUNNER_TEMP/compiled" "$RUNNER_TEMP/$NAME"
+          BIN="$RUNNER_TEMP/compiled/$NAME.ino.bin"
+          ELF="$RUNNER_TEMP/compiled/$NAME.ino.elf"
+          test -s "$BIN"; test -s "$ELF"
+          python3 - "$BIN" <<'PY'
+          from pathlib import Path
+          import sys
+          b=Path(sys.argv[1]).read_bytes()
+          assert b[0]==0xe9, 'Not an ESP8266 firmware image'
+          assert 100000<len(b)<1000000, f'Unexpected OTA image size: {len(b)}'
+          print('ESP8266_V712_BIN_HEADER_AND_SIZE=PASS',len(b))
+          PY
+          cp "$BIN" "$RUNNER_TEMP/compiled/Ventilation_v7.12_DHT_GUARD_OTA.bin"
+          cp "$ELF" "$RUNNER_TEMP/compiled/Ventilation_v7.12_DHT_GUARD.elf"
+          (cd "$RUNNER_TEMP/compiled" && sha256sum Ventilation_v7.12_DHT_GUARD_OTA.bin > SHA256.txt)
+          printf 'VERSION=7.12\nAPPLICATION=ventilation\nHARDWARE_VALIDATION=UNVERIFIED\nOTA_PROFILE=ventilation-3ds18b20-2dht11-none\nESP8266_CORE=2.7.2\nFQBN=esp8266:esp8266:nodemcuv2:eesz=4M2M\nOLED_TYPE=0\nFLASH=4MB\nLITTLEFS=2MB\nSOURCE_SHA=%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/compiled/build_metadata.txt"
+          ls -lh "$RUNNER_TEMP/compiled"
+
+      - name: Upload test-only OTA BIN, ELF and integrity metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ventilation-v7.12-DHT-Guard-OTA-CANDIDATE
+          path: |
+            ${{ runner.temp }}/compiled/Ventilation_v7.12_DHT_GUARD_OTA.bin
+            ${{ runner.temp }}/compiled/Ventilation_v7.12_DHT_GUARD.elf
+            ${{ runner.temp }}/compiled/SHA256.txt
+            ${{ runner.temp }}/compiled/build_metadata.txt
+          if-no-files-found: error
