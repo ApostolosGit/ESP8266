@@ -4620,6 +4620,8 @@ unsigned long ventMaximumSampleGapMs = 0;
 uint32_t ventCompletedSampleCount = 0;
 const unsigned long VENT_DS_CONVERSION_WAIT_MS = 750UL; // 12-bit worst case
 // v7.11 WDT: only 784 stack bytes, 5016 heap bytes, 4408 max block.
+const unsigned long VENT_DHT_SAMPLE_INTERVAL_MS = 2500UL;
+unsigned long ventDhtLastServiceMs = 0;
 const uint32_t VENT_DHT_MIN_STACK_BYTES = 1536UL;
 const uint32_t VENT_DHT_MIN_HEAP_BYTES = 8192UL;
 const uint32_t VENT_DHT_MIN_BLOCK_BYTES = 6144UL;
@@ -4650,54 +4652,11 @@ void sampleHardware() {
   temperatureOutside=validTemperature(out)?out:NAN;
   temperatureInside=validTemperature(in)?in:NAN;
   temperatureMiddle=validTemperature(mid)?mid:NAN;
-  // Only one noncritical DHT11 each completed DS cycle, alternating probes.
-  // Critical DS18B20 sampling, SafeMode and fan control are unchanged.
-  const bool readOutside = ventDhtOutsideNext;
-  ventDhtOutsideNext = !ventDhtOutsideNext;
-  ventDhtLastStackBytes = ESP.getFreeContStack();
-  ventDhtLastHeapBytes = ESP.getFreeHeap();
-  ventDhtLastMaxBlockBytes = ESP.getMaxFreeBlockSize();
-  const bool dhtMemoryReady =
-    ventDhtLastStackBytes >= VENT_DHT_MIN_STACK_BYTES &&
-    ventDhtLastHeapBytes >= VENT_DHT_MIN_HEAP_BYTES &&
-    ventDhtLastMaxBlockBytes >= VENT_DHT_MIN_BLOCK_BYTES;
-  if (!dhtMemoryReady) {
-    ++ventDhtLowMemorySkips;
-    // Optional data is unavailable rather than a misleading stale value.
-    if (readOutside) { humidityOutside=NAN; dhtTemperatureOutside=NAN; }
-    else { humidityInside=NAN; dhtTemperatureInside=NAN; }
-  } else {
-    sensorTrace.enter(readOutside ?
-      CRASH_STAGE_VENT_DHT_OUTSIDE : CRASH_STAGE_VENT_DHT_INSIDE,
-      ventDhtLastStackBytes);
-    const unsigned long beginDhtMs = millis();
-    if (readOutside) {
-      humidityOutside = dhtOutside.readHumidity();
-      dhtTemperatureOutside = dhtOutside.readTemperature(); // cached
-      ++ventDhtOutsideReads;
-      if (!std::isfinite(humidityOutside) || !validTemperature(dhtTemperatureOutside))
-        ++ventDhtReadFailures;
-    } else {
-      humidityInside = dhtInside.readHumidity();
-      dhtTemperatureInside = dhtInside.readTemperature(); // cached
-      ++ventDhtInsideReads;
-      if (!std::isfinite(humidityInside) || !validTemperature(dhtTemperatureInside))
-        ++ventDhtReadFailures;
-    }
-    ventDhtLastDurationMs = millis() - beginDhtMs;
-  }
-  // Service the Wi-Fi SDK following this timing-sensitive optional read.
-  yield();
-  // No DHT error or low-memory skip affects the critical DS fan decision.
   const bool outOk=validTemperature(temperatureOutside);
   const bool inOk=validTemperature(temperatureInside);
   ventTrackProbe(DS_OUTSIDE,outOk);
   ventTrackProbe(DS_MIDDLE,validTemperature(temperatureMiddle));
   ventTrackProbe(DS_INSIDE,inOk);
-  ventTrackProbe(DHT_OUT_TEMP,validTemperature(dhtTemperatureOutside));
-  ventTrackProbe(DHT_OUT_HUM,std::isfinite(humidityOutside)&&humidityOutside>=0&&humidityOutside<=100);
-  ventTrackProbe(DHT_IN_TEMP,validTemperature(dhtTemperatureInside));
-  ventTrackProbe(DHT_IN_HUM,std::isfinite(humidityInside)&&humidityInside>=0&&humidityInside<=100);
   if(outOk){if(ventGoodOutside<VENT_GOOD_FOR_REARM)++ventGoodOutside;}
   else ventGoodOutside=0;
   if(inOk){if(ventGoodInside<VENT_GOOD_FOR_REARM)++ventGoodInside;}
@@ -4716,6 +4675,65 @@ void sampleHardware() {
   }
   ventLastSampleCompletedMs=completedAt;
   ++ventCompletedSampleCount;
+  noteLocalMemoryLowWater();
+}
+
+// DHT timing is now a separate shallow-stack task, never nested inside the
+// critical DS18B20 conversion and fan decision. Only ONE DHT is touched per
+// 2.5-second tick, so each probe is sampled at most once per 5 seconds.
+void serviceDhtSample(unsigned long now) {
+  if (!ventCompletedSampleCount) return; // DS has not completed first read.
+  if (ventDhtLastServiceMs && (unsigned long)(now-ventDhtLastServiceMs) <
+      VENT_DHT_SAMPLE_INTERVAL_MS) return;
+  ventDhtLastServiceMs = now;
+  // Only one noncritical DHT11 each completed DS cycle, alternating probes.
+    // Critical DS18B20 sampling, SafeMode and fan control are unchanged.
+    const bool readOutside = ventDhtOutsideNext;
+    ventDhtOutsideNext = !ventDhtOutsideNext;
+    ventDhtLastStackBytes = ESP.getFreeContStack();
+    ventDhtLastHeapBytes = ESP.getFreeHeap();
+    ventDhtLastMaxBlockBytes = ESP.getMaxFreeBlockSize();
+    const bool dhtMemoryReady =
+      ventDhtLastStackBytes >= VENT_DHT_MIN_STACK_BYTES &&
+      ventDhtLastHeapBytes >= VENT_DHT_MIN_HEAP_BYTES &&
+      ventDhtLastMaxBlockBytes >= VENT_DHT_MIN_BLOCK_BYTES;
+    if (!dhtMemoryReady) {
+      ++ventDhtLowMemorySkips;
+      // Optional data is unavailable rather than a misleading stale value.
+      if (readOutside) { humidityOutside=NAN; dhtTemperatureOutside=NAN; }
+      else { humidityInside=NAN; dhtTemperatureInside=NAN; }
+    } else {
+      CrashTraceScope dhtTrace(readOutside ?
+        CRASH_STAGE_VENT_DHT_OUTSIDE : CRASH_STAGE_VENT_DHT_INSIDE,
+        ventDhtLastStackBytes);
+      const unsigned long beginDhtMs = millis();
+      if (readOutside) {
+        humidityOutside = dhtOutside.readHumidity();
+        dhtTemperatureOutside = dhtOutside.readTemperature(); // cached
+        ++ventDhtOutsideReads;
+        if (!std::isfinite(humidityOutside) || !validTemperature(dhtTemperatureOutside))
+          ++ventDhtReadFailures;
+      } else {
+        humidityInside = dhtInside.readHumidity();
+        dhtTemperatureInside = dhtInside.readTemperature(); // cached
+        ++ventDhtInsideReads;
+        if (!std::isfinite(humidityInside) || !validTemperature(dhtTemperatureInside))
+          ++ventDhtReadFailures;
+      }
+      ventDhtLastDurationMs = millis() - beginDhtMs;
+    }
+    // Service the Wi-Fi SDK following this timing-sensitive optional read.
+    yield();
+    // No DHT error or low-memory skip affects the critical DS fan decision.
+  
+  if (ventDhtOutsideNext) {
+    // The INSIDE probe was just sampled (or deliberately skipped).
+    ventTrackProbe(DHT_IN_TEMP,validTemperature(dhtTemperatureInside));
+    ventTrackProbe(DHT_IN_HUM,std::isfinite(humidityInside)&&humidityInside>=0&&humidityInside<=100);
+  } else {
+    ventTrackProbe(DHT_OUT_TEMP,validTemperature(dhtTemperatureOutside));
+    ventTrackProbe(DHT_OUT_HUM,std::isfinite(humidityOutside)&&humidityOutside>=0&&humidityOutside<=100);
+  }
   noteLocalMemoryLowWater();
 }
 
@@ -5310,6 +5328,7 @@ void applicationServiceLocal(unsigned long now) {
   updateClock();
   sampleHardware();
   applyFanControl();
+  serviceDhtSample(millis());
   logTemperatureMinute();
   if(now-lastLedAt>=500UL){lastLedAt=now;digitalWrite(GPIO_LED,!digitalRead(GPIO_LED));}
 }
